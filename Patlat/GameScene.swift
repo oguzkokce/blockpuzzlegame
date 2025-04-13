@@ -2,6 +2,7 @@
 // GameScene.swift
 import SpriteKit
 import UIKit
+import AVFoundation
 
 let gridSize = 10
 let cellSize: CGFloat = 40
@@ -25,13 +26,17 @@ class GameScene: SKScene {
     private var score = 0
     private var rotateUsed = false
     private var rotateButton: SKSpriteNode!
+    private var comboCount = 0
+    var audioPlayer: AVAudioPlayer?
+
+
 
     override func didMove(to view: SKView) {
         setupGame()
     }
 
     func setupGame() {
-        rotateButton = SKSpriteNode(color: .orange, size: CGSize(width: 80, height: 40))
+        rotateButton = SKSpriteNode(color: .orange, size: CGSize(width: 120, height: 50))
         rotateButton.position = CGPoint(x: size.width - 80, y: size.height - 60)
         rotateButton.name = "rotateButton"
         
@@ -42,6 +47,22 @@ class GameScene: SKScene {
         label.verticalAlignmentMode = .center
         label.position = .zero
         rotateButton.addChild(label)
+        
+        scoreLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        scoreLabel.fontSize = 24
+        scoreLabel.fontColor = .white
+        scoreLabel.position = CGPoint(x: size.width / 2, y: size.height - 140)
+        scoreLabel.text = "Skor: 0"
+        addChild(scoreLabel)
+
+        // 🏆 High Score etiketi
+        let highScoreLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        highScoreLabel.name = "highScoreLabel"
+        highScoreLabel.fontSize = 18
+        highScoreLabel.fontColor = .systemYellow
+        highScoreLabel.position = CGPoint(x: size.width / 2, y: size.height - 170)
+        highScoreLabel.text = "En Yüksek Skor: \(UserDefaults.standard.integer(forKey: "HighScore"))"
+        addChild(highScoreLabel)
         
         
         let lockIcon = SKLabelNode(text: "🔒")
@@ -68,13 +89,7 @@ class GameScene: SKScene {
         drawGrid()
         spawnNextBlocks()
 
-        score = 0
-        scoreLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
-        scoreLabel.fontSize = 24
-        scoreLabel.fontColor = .white
-        scoreLabel.position = CGPoint(x: size.width / 2, y: size.height - 140)
-        scoreLabel.text = "Skor: 0"
-        addChild(scoreLabel)
+      
         
         updateRotateButtonState()
     }
@@ -191,6 +206,8 @@ class GameScene: SKScene {
                     spawnNextBlocks()
                 }
             }
+            checkGameOver()
+
         } else {
             returnToLastValidPosition(node)
         }
@@ -263,8 +280,9 @@ class GameScene: SKScene {
         lastValidPosition = finalPosition
         checkAndClearLines()
 
-        // 🔥 Blok başarıyla yerleştirildi, oyun bitmiş mi bakalım
-        checkGameOver()
+
+        
+        
     }
 
 
@@ -357,26 +375,21 @@ class GameScene: SKScene {
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self = self else { return }
+                guard let self = self else { return }
 
-            // 🔄 Döndürme sonrası şekle göre grid'e oturabiliyor mu bakalım
-            if let block = self.nextBlocks.first,
-               !self.canPlaceBlock(block, considerRotation: false) {
+                if let block = self.nextBlocks.first,
+                   !self.canPlaceBlock(block, considerRotation: false) {
 
-                // Şimdi döndürme de kullanıldı, hala yerleştirilemiyor mu?
-                if !self.canPlaceBlock(block, considerRotation: true) {
-                    print("🟥 Döndürme sonrası da yerleştirilemiyor. GAME OVER.")
-                    self.showGameOver()
+                    if !self.canPlaceBlock(block, considerRotation: true) {
+                        print("🟥 Döndürme sonrası da yerleşemiyor. GAME OVER.")
+                        self.showGameOver()
+                    } else {
+                        print("✅ Döndürme sonrası şekil yerleşebilir hale geldi.")
+                    }
                 } else {
-                    print("✅ Döndürme sonrası şekil yerleşebilir hale geldi.")
+                    print("✅ Döndürme sonrası mevcut haliyle yerleşebilir.")
                 }
-            } else {
-                print("✅ Döndürme sonrası mevcut haliyle yerleşebilir.")
             }
-        }
-
-
-
     }
 
 
@@ -404,9 +417,6 @@ class GameScene: SKScene {
         selectedNode = nil
         updateRotateButtonState()
         checkGameOver()
-  
-        
-        
     }
 
     func generateRandomShape() -> BlockShape {
@@ -416,13 +426,23 @@ class GameScene: SKScene {
             [(0,0), (1,0), (0,1), (1,1)],
             [(0,0), (1,0), (2,0), (3,0)],
             [(0,0), (0,1), (0,2), (1,2)],
-            [(0,0), (1,0), (1,1), (2,1)]
+            [(0,0), (1,0), (1,1), (2,1)],
+            [(0,0), (1,0), (2,0), (2,1)],       // L
+            [(0,0), (1,0), (1,-1), (1,1)],      // T
+            [(0,0), (0,1), (1,1), (1,2)],       // Z
+            [(0,0), (1,0), (2,0), (2,-1)]       // ters L
         ]
-        let colors: [SKColor] = [.cyan, .orange, .green, .yellow, .systemPink, .magenta, .blue]
+
+        let colors: [SKColor] = [
+            .cyan, .orange, .green, .yellow,
+            .systemPink, .magenta, .blue, .systemRed, .purple
+        ]
+
         let randomIndex = Int.random(in: 0..<shapes.count)
         let randomColor = colors.randomElement() ?? .white
         return BlockShape(cells: shapes[randomIndex], color: randomColor)
     }
+
 
     func spawnBlock(from shape: BlockShape, at position: CGPoint) -> SKNode {
         let blockNode = SKNode()
@@ -470,9 +490,16 @@ class GameScene: SKScene {
                            fullCols.flatMap { col in (0..<gridSize).map { ($0, col) } }
 
         let lineCount = fullRows.count + fullCols.count
-        if lineCount >= 3 {
-            showComboEffect()
+        if lineCount > 0 {
+            comboCount += 1
+
+            if comboCount >= 2 {
+                showComboEffect(level: comboCount)
+            }
+        } else {
+            comboCount = 0
         }
+
 
         let basePoints = lineCount * 120
         let bonus = (lineCount >= 3) ? 20 : 0
@@ -493,6 +520,15 @@ class GameScene: SKScene {
                 gridSpriteMap[row][col] = nil
             }
         }
+        // 🎯 High Score kontrolü
+        let currentHigh = UserDefaults.standard.integer(forKey: "HighScore")
+        if score > currentHigh {
+            UserDefaults.standard.set(score, forKey: "HighScore")
+            if let highScoreLabel = childNode(withName: "highScoreLabel") as? SKLabelNode {
+                highScoreLabel.text = "En Yüksek Skor: \(score)"
+            }
+        }
+        
     }
     func showComboEffect() {
         let comboLabel = SKLabelNode(text: "✨ KOMBO! ✨")
@@ -652,6 +688,31 @@ class GameScene: SKScene {
         // 🔥 Yeni bloklar getir
         spawnNextBlocks()
     }
+    
+    func showComboEffect(level: Int) {
+        let labelText = "✨ \(level)x KOMBO! ✨"
+        let comboLabel = SKLabelNode(text: labelText)
+        comboLabel.fontName = "AvenirNext-Bold"
+        comboLabel.fontSize = 36 + CGFloat(level * 2)
+        comboLabel.fontColor = .systemYellow
+        comboLabel.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        comboLabel.zPosition = 100
+        comboLabel.alpha = 0
+        addChild(comboLabel)
+
+        let fadeIn = SKAction.fadeIn(withDuration: 0.2)
+        let scaleUp = SKAction.scale(to: 1.4, duration: 0.2)
+        let wait = SKAction.wait(forDuration: 0.6)
+        let fadeOut = SKAction.fadeOut(withDuration: 0.3)
+        let remove = SKAction.removeFromParent()
+
+        let groupIn = SKAction.group([fadeIn, scaleUp])
+        let sequence = SKAction.sequence([groupIn, wait, fadeOut, remove])
+        comboLabel.run(sequence)
+    }
+    
+    
+
 
 
 
