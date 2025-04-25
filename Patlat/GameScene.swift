@@ -13,6 +13,8 @@ struct BlockShape {
     let color: SKColor
 }
 
+
+
 class GameScene: SKScene {
     private var nextBlocks: [SKNode] = []
     private var selectedNode: SKNode?
@@ -32,7 +34,14 @@ class GameScene: SKScene {
 
 
     override func didMove(to view: SKView) {
+        let background = SKSpriteNode(imageNamed: "bg-space")
+        background.position = CGPoint(x: size.width/2, y: size.height/2)
+        background.zPosition = -10
+        background.size = size
+        background.alpha = 0.7
+        addChild(background)
         setupGame()
+        
     }
 
     func setupGame() {
@@ -95,18 +104,35 @@ class GameScene: SKScene {
     }
 
     func drawGrid() {
+        let glow = SKShapeNode(rectOf: CGSize(width: cellSize * CGFloat(gridSize) + 20, height: cellSize * CGFloat(gridSize) + 20))
+          glow.fillColor = .white
+          glow.alpha = 0.05
+          glow.zPosition = -3
+          glow.position = CGPoint(x: size.width / 2, y: size.height / 2)
+          addChild(glow)
+        
+        let gridBackground = SKShapeNode(rectOf: CGSize(width: cellSize * CGFloat(gridSize), height: cellSize * CGFloat(gridSize)), cornerRadius: 12)
+        gridBackground.fillColor = .black.withAlphaComponent(0.2)
+        gridBackground.strokeColor = .white.withAlphaComponent(0.05)
+        gridBackground.lineWidth = 1
+        gridBackground.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        gridBackground.zPosition = -2
+        addChild(gridBackground)
+
         for row in 0..<gridSize {
             for col in 0..<gridSize {
-                let cell = SKShapeNode(rectOf: CGSize(width: cellSize - 1, height: cellSize - 1))
-                cell.strokeColor = SKColor.gray.withAlphaComponent(0.3)
-                cell.fillColor = SKColor.clear
+                let cell = SKShapeNode(rectOf: CGSize(width: cellSize - 1, height: cellSize - 1), cornerRadius: 4)
+                cell.strokeColor = SKColor.white.withAlphaComponent(0.07)
+                cell.fillColor = SKColor.white.withAlphaComponent(0.02)
                 cell.lineWidth = 1
                 cell.position = gridPositionToPoint(row: row, col: col)
+                cell.zPosition = -1
                 gridNodes[row][col] = cell
                 addChild(cell)
             }
         }
     }
+
 
     func updateRotateButtonState() {
         guard rotateButton != nil else { return }
@@ -128,8 +154,19 @@ class GameScene: SKScene {
         // ✅ Restart butonuna tıklandıysa oyunu yeniden başlat
         if touchedNode.name == "restartButton" {
             restartGame()
+            
+           
+
             return
         }
+        if touchedNode.name == "menuButton" {
+            let menuScene = MenuScene(size: size)
+            menuScene.scaleMode = .aspectFill
+            view?.presentScene(menuScene, transition: .fade(withDuration: 0.5))
+            return()
+        }
+        
+        
 
         // 🔄 Döndürme butonu kontrolü
         let isRotateButtonTapped = touchedNode.name == "rotateButton" || touchedNode.parent?.name == "rotateButton"
@@ -395,17 +432,24 @@ class GameScene: SKScene {
 
 
     func spawnNextBlocks() {
+        // Önce önceki blokları temizle
         for block in nextBlocks {
             block.removeFromParent()
         }
         nextBlocks.removeAll()
+        
+        // Yeni görünüm için daha düzgün pozisyonlar belirle
+        let blockAreaY: CGFloat = 100
+        let spacing: CGFloat = 140
 
         let spawnPositions: [CGPoint] = [
-            CGPoint(x: 100, y: 80),
-            CGPoint(x: 200, y: 80),
-            CGPoint(x: 300, y: 80)
+            CGPoint(x: size.width / 2 - spacing, y: blockAreaY),
+            CGPoint(x: size.width / 2, y: blockAreaY),
+            CGPoint(x: size.width / 2 + spacing, y: blockAreaY)
         ]
+        
 
+        // Yeni blokları oluştur ve yerleştir
         for i in 0..<3 {
             let shape = generateRandomShape()
             let block = spawnBlock(from: shape, at: spawnPositions[i])
@@ -413,11 +457,20 @@ class GameScene: SKScene {
             nextBlocks.append(block)
         }
 
+        // Ortadaki blok vurgulansın (isteğe bağlı efekt)
+        if let active = nextBlocks.first {
+            active.run(SKAction.sequence([
+                SKAction.scale(to: 1.1, duration: 0.15),
+                SKAction.scale(to: 1.0, duration: 0.15)
+            ]))
+        }
+
         rotateUsed = false
         selectedNode = nil
         updateRotateButtonState()
         checkGameOver()
     }
+
 
     func generateRandomShape() -> BlockShape {
         let shapes: [[(Int, Int)]] = [
@@ -444,7 +497,7 @@ class GameScene: SKScene {
     }
 
 
-    func spawnBlock(from shape: BlockShape, at position: CGPoint) -> SKNode {
+    func spawnBlock(from shape: BlockShape, at position: CGPoint, scale: CGFloat = 1.0) -> SKNode {
         let blockNode = SKNode()
         blockNode.name = "draggable"
 
@@ -631,13 +684,24 @@ class GameScene: SKScene {
         overlay.name = "gameOverOverlay" // ✅ bunu ekle!
         addChild(overlay)
 
-        let gameOverLabel = SKLabelNode(text: "🟥 GAME OVER 🟥")
-        gameOverLabel.fontName = "AvenirNext-Bold"
-        gameOverLabel.fontSize = 42
-        gameOverLabel.fontColor = .red
-        gameOverLabel.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        let gameOverLabel = SKLabelNode(text: "OYUN BİTTİ HEHEHEHe")
+        gameOverLabel.name = "gameOverLabel" // EKLE
+        gameOverLabel.fontName = "AvenirNext-Heavy"
+        gameOverLabel.fontSize = 28
+        gameOverLabel.fontColor = .systemRed
+        gameOverLabel.position = CGPoint(x: size.width / 2, y: size.height * 0.7)
         gameOverLabel.zPosition = 1001
+        gameOverLabel.alpha = 0
         addChild(gameOverLabel)
+
+        let fadeIn = SKAction.fadeIn(withDuration: 0.4)
+        let scaleUp = SKAction.scale(to: 1.2, duration: 0.2)
+        let scaleDown = SKAction.scale(to: 1.0, duration: 0.2)
+        let pulse = SKAction.sequence([scaleUp, scaleDown])
+        let repeatPulse = SKAction.repeatForever(pulse)
+
+        gameOverLabel.run(SKAction.sequence([fadeIn, repeatPulse]))
+
         
         let restartButton = SKLabelNode(text: "🔄 Yeniden Başla")
           restartButton.name = "restartButton"
@@ -647,10 +711,25 @@ class GameScene: SKScene {
           restartButton.position = CGPoint(x: size.width / 2, y: size.height / 2 - 20)
           restartButton.zPosition = 1001
           addChild(restartButton)
+        
+        let menuButton = SKLabelNode(text: "🏠 Ana Menüye Dön")
+        menuButton.name = "menuButton"
+        menuButton.fontName = "AvenirNext-Bold"
+        menuButton.fontSize = 24
+        menuButton.fontColor = .white
+        menuButton.position = CGPoint(x: size.width/2, y: size.height * 0.4)
+        menuButton.zPosition = 1001
+        addChild(menuButton)
+
     }
     
     func restartGame() {
         print("🔄 Oyun yeniden başlatılıyor...")
+        
+        ["gameOverOverlay", "gameOverLabel", "restartButton", "menuButton"].forEach { name in
+            childNode(withName: name)?.removeFromParent()
+        }
+
 
         // Game over overlay ve yazılar silinsin
         childNode(withName: "gameOverOverlay")?.removeFromParent()
@@ -711,6 +790,30 @@ class GameScene: SKScene {
         comboLabel.run(sequence)
     }
     
+    func createFancyBlockNode(shape: BlockShape) -> SKNode {
+        let node = SKNode()
+        
+        for (dx, dy) in shape.cells {
+            let size = CGSize(width: cellSize - 4, height: cellSize - 4)
+            
+            let square = SKShapeNode(rectOf: size, cornerRadius: 6)
+            square.fillColor = shape.color
+            square.strokeColor = .white
+            square.lineWidth = 1.5
+
+            let glow = SKShapeNode(rectOf: CGSize(width: cellSize, height: cellSize), cornerRadius: 8)
+            glow.fillColor = shape.color
+            glow.alpha = 0.12
+            glow.zPosition = -1
+            square.addChild(glow)
+            
+            square.position = CGPoint(x: CGFloat(dx) * cellSize, y: CGFloat(dy) * cellSize)
+            node.addChild(square)
+        }
+        
+        return node
+    }
+
     
 
 
