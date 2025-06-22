@@ -6,15 +6,33 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		1633DFAF2DDCB0AF00E24A7B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1633DFAC2DDCB0AF00E24A7B /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		1633DFAC2DDCB0AF00E24A7B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		16BC03532DA91C85001C289F /* Patlat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Patlat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		16BC03592DA91C85001C289F /* SpriteKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SpriteKit.framework; path = System/Library/Frameworks/SpriteKit.framework; sourceTree = SDKROOT; };
 		16BC03602DA91C85001C289F /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		1689DFB82DE83F5900C9FE57 /* Exceptions for "Patlat" folder in "Patlat" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 16BC03522DA91C85001C289F /* Patlat */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		16BC03552DA91C85001C289F /* Patlat */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1689DFB82DE83F5900C9FE57 /* Exceptions for "Patlat" folder in "Patlat" target */,
+			);
 			path = Patlat;
 			sourceTree = "<group>";
 		};
@@ -34,6 +52,7 @@
 		16BC034A2DA91C85001C289F = {
 			isa = PBXGroup;
 			children = (
+				1633DFAC2DDCB0AF00E24A7B /* Assets.xcassets */,
 				16BC03552DA91C85001C289F /* Patlat */,
 				16BC03542DA91C85001C289F /* Products */,
 				16BC03582DA91C85001C289F /* Frameworks */,
@@ -121,6 +140,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1633DFAF2DDCB0AF00E24A7B /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -265,6 +285,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 54WQZA4XMV;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Patlat/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -294,6 +316,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 54WQZA4XMV;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Patlat/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;

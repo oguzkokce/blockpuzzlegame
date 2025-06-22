@@ -9,6 +9,24 @@ import UIKit
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
+    struct Settings {
+        static var isHapticEnabled: Bool {
+            get { UserDefaults.standard.bool(forKey: "hapticEnabled") }
+            set { UserDefaults.standard.set(newValue, forKey: "hapticEnabled") }
+        }
+        static var isSoundEnabled: Bool {
+            get { UserDefaults.standard.bool(forKey: "soundEnabled") }
+            set { UserDefaults.standard.set(newValue, forKey: "soundEnabled") }
+        }
+
+        // Uygulama ilk açıldığında varsayılan değerleri atamak için
+        static func registerDefaults() {
+            UserDefaults.standard.register(defaults: [
+                "hapticEnabled": true,
+                "soundEnabled": true
+            ])
+        }
+    }
 
     var window: UIWindow?
 
