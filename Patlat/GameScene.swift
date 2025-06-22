@@ -421,7 +421,7 @@ class GameScene: SKScene {
            
            if UserDefaults.standard.dictionary(forKey: "savedGameState") != nil {
                NotificationCenter.default.addObserver(self, selector: #selector(saveGameState), name: NSNotification.Name("saveGame"), object: nil)
-                   setupGame() // Önce boş bir oyun alanı kur
+                   setupGame(spawnInitialBlocks: false) // Önce sadece arayüzü ve grid'i hazırla
                    loadGameState() // Sonra kayıtlı oyunu üzerine yükle
                } else {
                    setupGame() // Normal yeni oyun başlangıcı
@@ -539,7 +539,7 @@ class GameScene: SKScene {
               
           }
 
-    func setupGame() {
+    func setupGame(spawnInitialBlocks: Bool = true) {
         backgroundColor = SKColor(red: 0.1, green: 0.12, blue: 0.2, alpha: 1.0)
         previewContainer.zPosition = 100
         addChild(previewContainer)
@@ -644,8 +644,10 @@ class GameScene: SKScene {
             y: (size.height - CGFloat(gridSize) * cellSize) / 2
         )
         drawGrid()
-        spawnNextBlocks()
-        updateRotateButtonState()
+        if spawnInitialBlocks {
+            spawnNextBlocks()
+            updateRotateButtonState()
+        }
     }
 
     func drawGrid() {
@@ -739,9 +741,15 @@ class GameScene: SKScene {
                     }
                 case "menuSettingsButton":
                      tappedNode.run(tapAction) { [weak self] in
-                        if let view = self?.view {
-                            let menuScene = MenuScene(size: self!.size)
-                            menuScene.scaleMode = self!.scaleMode
+                        guard let self = self else { return }
+                        self.isSettingsPanelDisplayed = false
+                        panel.removeFromParent()
+                        self.childNode(withName: "settingsOverlay")?.removeFromParent()
+                        self.saveGameState()
+
+                        if let view = self.view {
+                            let menuScene = MenuScene(size: self.size)
+                            menuScene.scaleMode = self.scaleMode
                             view.presentScene(menuScene, transition: .fade(withDuration: 0.75))
                         }
                      }
@@ -768,7 +776,14 @@ class GameScene: SKScene {
 
             if initiallyTouchedNode.name == "restartButton" || initiallyTouchedNode.parent?.name == "restartButton" { restartGame(); return }
             if initiallyTouchedNode.name == "menuButton" || initiallyTouchedNode.parent?.name == "menuButton" {
-                 if let view = self.view { let menuScene = MenuScene(size: self.size); menuScene.scaleMode = self.scaleMode; view.presentScene(menuScene, transition: SKTransition.fade(withDuration: 0.75)) }; return
+                 childNode(withName: "gameOverOverlay")?.removeFromParent()
+                 childNode(withName: "gameOverPanel")?.removeFromParent()
+                 if let view = self.view {
+                     let menuScene = MenuScene(size: self.size)
+                     menuScene.scaleMode = self.scaleMode
+                     view.presentScene(menuScene, transition: SKTransition.fade(withDuration: 0.75))
+                 }
+                 return
             }
             if initiallyTouchedNode.name == "settingsButton" || initiallyTouchedNode.parent?.name == "settingsButton" {
                 guard !isSettingsPanelDisplayed else { return }

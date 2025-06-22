@@ -1,13 +1,25 @@
 import Foundation
 
 struct Settings {
-    static var isSoundEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "isSoundEnabled") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "isSoundEnabled") }
+    private static let soundKey = "soundEnabled"
+    private static let hapticKey = "hapticEnabled"
+
+    /// Uygulama ilk açıldığında varsayılan değerleri kaydeder.
+    static func registerDefaults() {
+        UserDefaults.standard.register(defaults: [
+            soundKey: true,
+            hapticKey: true
+        ])
     }
+
+    static var isSoundEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: soundKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: soundKey) }
+    }
+
     static var isHapticEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "isHapticEnabled") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "isHapticEnabled") }
+        get { UserDefaults.standard.object(forKey: hapticKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: hapticKey) }
     }
 }
 //
