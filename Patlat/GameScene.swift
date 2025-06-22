@@ -739,9 +739,14 @@ class GameScene: SKScene {
                     }
                 case "menuSettingsButton":
                      tappedNode.run(tapAction) { [weak self] in
-                        if let view = self?.view {
-                            let menuScene = MenuScene(size: self!.size)
-                            menuScene.scaleMode = self!.scaleMode
+                        guard let self = self else { return }
+                        self.isSettingsPanelDisplayed = false
+                        panel.removeFromParent()
+                        self.childNode(withName: "settingsOverlay")?.removeFromParent()
+
+                        if let view = self.view {
+                            let menuScene = MenuScene(size: self.size)
+                            menuScene.scaleMode = self.scaleMode
                             view.presentScene(menuScene, transition: .fade(withDuration: 0.75))
                         }
                      }
@@ -768,7 +773,14 @@ class GameScene: SKScene {
 
             if initiallyTouchedNode.name == "restartButton" || initiallyTouchedNode.parent?.name == "restartButton" { restartGame(); return }
             if initiallyTouchedNode.name == "menuButton" || initiallyTouchedNode.parent?.name == "menuButton" {
-                 if let view = self.view { let menuScene = MenuScene(size: self.size); menuScene.scaleMode = self.scaleMode; view.presentScene(menuScene, transition: SKTransition.fade(withDuration: 0.75)) }; return
+                 childNode(withName: "gameOverOverlay")?.removeFromParent()
+                 childNode(withName: "gameOverPanel")?.removeFromParent()
+                 if let view = self.view {
+                     let menuScene = MenuScene(size: self.size)
+                     menuScene.scaleMode = self.scaleMode
+                     view.presentScene(menuScene, transition: SKTransition.fade(withDuration: 0.75))
+                 }
+                 return
             }
             if initiallyTouchedNode.name == "settingsButton" || initiallyTouchedNode.parent?.name == "settingsButton" {
                 guard !isSettingsPanelDisplayed else { return }
