@@ -3,8 +3,9 @@ import UIKit
 import AVFoundation
 
 let gridSize = 8
-let cellSize: CGFloat = 50
+var cellSize: CGFloat = 50
 var gridOrigin: CGPoint = .zero
+let gridEmptyColor = SKColor(white: 0.08, alpha: 1.0)
 
 
 enum ProspectiveHighlightEffectType {
@@ -45,17 +46,20 @@ class GameScene: SKScene {
         case place, lineClear, combo, bomb, rainbow
     }
     let pointsPerBlockFromSpecial: Int = 25
+    let pointsPerPlacementCell: Int = 1
     var nextBlocks: [SKNode] = []
     var selectedNode: SKNode?
     var lastValidPosition: CGPoint?
     var isDragging = false
+    private var draggingTouch: UITouch?
+    private var dragStartLocation: CGPoint?
+    private var canRotate = false
     var gridNodes: [[SKShapeNode]] = []
     var gridState: [[Int]] = []
     var gridSpriteMap: [[SKShapeNode?]] = []
     var blockOffset: CGPoint = .zero
     var scoreLabel: SKLabelNode!
     var score = 0
-    var rotateUsed = false
     var rotateButton: SKSpriteNode!
     var comboCount = 0
     var audioPlayer: AVAudioPlayer?
@@ -93,6 +97,91 @@ class GameScene: SKScene {
             originalAlpha: CGFloat        // İkisi için de orijinal alpha
         )
     ] = []
+
+    private func updateGridMetrics() {
+        let safeInsets = view?.safeAreaInsets ?? .zero
+        let horizontalPadding: CGFloat = 24
+        let topReserve: CGFloat = safeInsets.top + 170
+        let bottomReserve: CGFloat = safeInsets.bottom + 170
+        let maxCellWidth = (size.width - horizontalPadding * 2) / CGFloat(gridSize)
+        let maxCellHeight = (size.height - topReserve - bottomReserve) / CGFloat(gridSize)
+        let calculatedCellSize = floor(min(maxCellWidth, maxCellHeight))
+        cellSize = max(28, calculatedCellSize)
+
+        let gridSide = CGFloat(gridSize) * cellSize
+        let availableHeight = size.height - topReserve - bottomReserve
+        let originY = bottomReserve + max(0, (availableHeight - gridSide) / 2)
+        gridOrigin = CGPoint(
+            x: (size.width - gridSide) / 2,
+            y: originY
+        )
+    }
+
+    private func blockTrayPositions() -> [CGPoint] {
+        let safeBottom = view?.safeAreaInsets.bottom ?? 0
+        let y = safeBottom + cellSize * 1.5
+        return [
+            CGPoint(x: size.width * 0.2, y: y),
+            CGPoint(x: size.width * 0.5, y: y),
+            CGPoint(x: size.width * 0.8, y: y)
+        ]
+    }
+
+    private func blockBounds(for block: BlockNode) -> CGRect {
+        var bounds = CGRect.null
+        for child in block.children where child.name != "selectionHalo" {
+            bounds = bounds.union(child.calculateAccumulatedFrame())
+        }
+        if bounds.isNull {
+            return CGRect(x: -cellSize / 2, y: -cellSize / 2, width: cellSize, height: cellSize)
+        }
+        return bounds
+    }
+
+    private func applySelectionHighlight(to block: BlockNode) {
+        let bounds = blockBounds(for: block)
+        let haloPadding = cellSize * 0.35
+        let haloSize = CGSize(width: bounds.width + haloPadding, height: bounds.height + haloPadding)
+
+        block.childNode(withName: "selectionHalo")?.removeFromParent()
+        let halo = SKShapeNode(rectOf: haloSize, cornerRadius: 6)
+        halo.name = "selectionHalo"
+        halo.strokeColor = SKColor.cyan.withAlphaComponent(0.8)
+        halo.fillColor = SKColor.cyan.withAlphaComponent(0.08)
+        halo.lineWidth = 2
+        halo.zPosition = -1
+        halo.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        block.addChild(halo)
+    }
+
+    private func clearSelectionHighlight(from block: BlockNode) {
+        block.childNode(withName: "selectionHalo")?.removeFromParent()
+    }
+
+    private func setSelectedBlock(_ block: BlockNode?) {
+        let currentBlock = selectedNode as? BlockNode
+        if let currentBlock = currentBlock, currentBlock != block {
+            clearSelectionHighlight(from: currentBlock)
+        }
+        guard let block = block else {
+            selectedNode = nil
+            canRotate = false
+            updateRotateButtonState()
+            return
+        }
+        selectedNode = block
+        let rotateUsed = block.userData?["rotateUsed"] as? Bool ?? false
+        canRotate = !rotateUsed
+        applySelectionHighlight(to: block)
+        updateRotateButtonState()
+    }
+
+    private func blockParts(from node: SKNode) -> [SKShapeNode] {
+        return node.children.compactMap { child in
+            guard let shape = child as? SKShapeNode, shape.name != "selectionHalo" else { return nil }
+            return shape
+        }
+    }
     
     
     
@@ -417,6 +506,7 @@ class GameScene: SKScene {
     
 
     override func didMove(to view: SKView) {
+           view.isMultipleTouchEnabled = false
           
            
            if UserDefaults.standard.dictionary(forKey: "savedGameState") != nil {
@@ -540,11 +630,12 @@ class GameScene: SKScene {
           }
 
     func setupGame(spawnInitialBlocks: Bool = true) {
+        updateGridMetrics()
         backgroundColor = SKColor(red: 0.1, green: 0.12, blue: 0.2, alpha: 1.0)
         previewContainer.zPosition = 100
         addChild(previewContainer)
         let safeTop = view?.safeAreaInsets.top ?? 44
-        let panelYOffset: CGFloat = 120 // Eskiden 50 idi, şimdi 120
+        let panelYOffset: CGFloat = max(110, cellSize * 2.2)
                let panel = SKShapeNode(rectOf: CGSize(width: 330, height: 72), cornerRadius: 18)
                panel.position = CGPoint(x: size.width / 2, y: size.height - safeTop - panelYOffset)
                panel.fillColor = SKColor.black.withAlphaComponent(0.45)
@@ -568,81 +659,45 @@ class GameScene: SKScene {
         highScoreLabel.position = CGPoint(x: -130, y: -18)
         panel.addChild(highScoreLabel)
         // --- Döndürme Butonu ---
-            rotateButton = SKSpriteNode(color: .clear, size: CGSize(width: 58, height: 58))
-            rotateButton.position = CGPoint(x: 120, y: 0)
-            rotateButton.name = "rotateButton"
+        let rotateSize = max(46, cellSize * 1.1)
+        rotateButton = SKSpriteNode(color: .clear, size: CGSize(width: rotateSize, height: rotateSize))
+        rotateButton.name = "rotateButton"
+        rotateButton.position = CGPoint(x: size.width - rotateSize * 0.7, y: blockTrayPositions()[0].y + cellSize * 0.9)
+        rotateButton.zPosition = 150
+        addChild(rotateButton)
 
-            // Neon Glow Çerçeve
-            let rotateGlow = SKShapeNode(circleOfRadius: 29)
-            rotateGlow.fillColor = SKColor.systemPink.withAlphaComponent(0.18)
-            rotateGlow.strokeColor = SKColor.cyan.withAlphaComponent(0.4)
-            rotateGlow.lineWidth = 3
-            rotateGlow.zPosition = -1
-            rotateButton.addChild(rotateGlow)
-            // Hafif parlama efekti
-            let glowPulse = SKAction.sequence([
-                SKAction.fadeAlpha(to: 0.36, duration: 0.8),
-                SKAction.fadeAlpha(to: 0.18, duration: 0.8)
-            ])
-            rotateGlow.run(SKAction.repeatForever(glowPulse))
+        let rotateGlow = SKShapeNode(circleOfRadius: rotateSize * 0.5)
+        rotateGlow.fillColor = SKColor.systemPink.withAlphaComponent(0.18)
+        rotateGlow.strokeColor = SKColor.cyan.withAlphaComponent(0.4)
+        rotateGlow.lineWidth = 3
+        rotateGlow.zPosition = -1
+        rotateButton.addChild(rotateGlow)
+        let glowPulse = SKAction.sequence([
+            SKAction.fadeAlpha(to: 0.36, duration: 0.8),
+            SKAction.fadeAlpha(to: 0.18, duration: 0.8)
+        ])
+        rotateGlow.run(SKAction.repeatForever(glowPulse))
 
-            // Buton ikonu: ↻, retro renkli, büyük ve canlı
-            let label = SKLabelNode(text: "↻")
-            label.fontName = "AvenirNext-Bold"
-            label.fontSize = 30
-            label.fontColor = SKColor.yellow
-            label.verticalAlignmentMode = .center
-            label.zPosition = 2
-            rotateButton.addChild(label)
-        
-        // GameScene.swift -> setupGame() fonksiyonu içine
+        let label = SKLabelNode(text: "↻")
+        label.fontName = "AvenirNext-Bold"
+        label.fontSize = rotateSize * 0.55
+        label.fontColor = SKColor.yellow
+        label.verticalAlignmentMode = .center
+        label.zPosition = 2
+        rotateButton.addChild(label)
 
-        // --- Duraklatma Butonu ---
-        let pauseButton = SKShapeNode(rectOf: CGSize(width: 58, height: 58), cornerRadius: 14)
-        pauseButton.name = "pauseButton"
-        pauseButton.fillColor = SKColor.black.withAlphaComponent(0.45)
-        pauseButton.strokeColor = SKColor.cyan.withAlphaComponent(0.6)
-        pauseButton.lineWidth = 2
-        // Pozisyonu ayarlar butonuna veya skor paneline göre ayarla. Örnek:
-        pauseButton.position = CGPoint(x: -size.width/2 + 50, y: size.height - safeTop - 50)
-        pauseButton.zPosition = 110
-        addChild(pauseButton)
+        let lockBar = SKShapeNode(rectOf: CGSize(width: rotateSize * 0.65, height: rotateSize * 0.12), cornerRadius: rotateSize * 0.06)
+        lockBar.fillColor = SKColor.red.withAlphaComponent(0.9)
+        lockBar.strokeColor = SKColor.red
+        lockBar.zRotation = CGFloat.pi / 5
+        lockBar.alpha = 0
+        lockBar.position = CGPoint(x: 0, y: 0)
+        lockBar.name = "lockBar"
+        rotateButton.addChild(lockBar)
 
-        // Butonun içine "II" şeklinde ikon yapalım
-        let pauseIconBar1 = SKShapeNode(rectOf: CGSize(width: 6, height: 24), cornerRadius: 3)
-        pauseIconBar1.fillColor = .white
-        pauseIconBar1.strokeColor = .clear
-        pauseIconBar1.position = CGPoint(x: -8, y: 0)
-        pauseButton.addChild(pauseIconBar1)
-
-        let pauseIconBar2 = SKShapeNode(rectOf: CGSize(width: 6, height: 24), cornerRadius: 3)
-        pauseIconBar2.fillColor = .white
-        pauseIconBar2.strokeColor = .clear
-        pauseIconBar2.position = CGPoint(x: 8, y: 0)
-        pauseButton.addChild(pauseIconBar2)
-
-        // Butonu topPanel'e eklemek istersen, addChild(pauseButton) yerine:
-        // pauseButton.position = CGPoint(x: -120, y: 0) // Panelin kendi koordinat sistemine göre
-        // panel.addChild(pauseButton)
-
-            // "Kilitli" durum göstergesi: Gerçek kilit emojisi yerine neon efektiyle çapraz bir çizgi
-            let lockBar = SKShapeNode(rectOf: CGSize(width: 38, height: 6), cornerRadius: 3)
-            lockBar.fillColor = SKColor.red.withAlphaComponent(0.9)
-            lockBar.strokeColor = SKColor.red
-            lockBar.zRotation = CGFloat.pi / 5
-            lockBar.alpha = 0 // Başta görünmez
-            lockBar.position = CGPoint(x: 0, y: 0)
-            lockBar.name = "lockBar"
-            rotateButton.addChild(lockBar)
-
-            panel.addChild(rotateButton)
         gridState = Array(repeating: Array(repeating: 0, count: gridSize), count: gridSize)
         gridNodes = Array(repeating: Array(repeating: SKShapeNode(), count: gridSize), count: gridSize)
         gridSpriteMap = Array(repeating: Array(repeating: nil, count: gridSize), count: gridSize)
-        gridOrigin = CGPoint(
-            x: (size.width - CGFloat(gridSize) * cellSize) / 2,
-            y: (size.height - CGFloat(gridSize) * cellSize) / 2
-        )
         drawGrid()
         if spawnInitialBlocks {
             spawnNextBlocks()
@@ -664,7 +719,8 @@ class GameScene: SKScene {
             */
 
             // 2. "gridBackground"u (Grid Alanının Arka Planı) Basitleştirin
-            let gridBackground = SKShapeNode(rectOf: CGSize(width: cellSize * CGFloat(gridSize), height: cellSize * CGFloat(gridSize)),
+            let gridSide = cellSize * CGFloat(gridSize)
+            let gridBackground = SKShapeNode(rectOf: CGSize(width: gridSide, height: gridSide),
                                              cornerRadius: 0) // Köşeleri keskin yapın: 0 veya çok küçük (2-3)
             
             // gridBackground için ana sahne arka planından ayırt edilebilir ama yine de koyu bir renk:
@@ -676,7 +732,7 @@ class GameScene: SKScene {
             gridBackground.lineWidth = 0      // Kenar çizgisi kalınlığı
             gridBackground.isAntialiased = false // Keskin görünüm
             
-            gridBackground.position = CGPoint(x: size.width / 2, y: size.height / 2)
+            gridBackground.position = CGPoint(x: gridOrigin.x + gridSide / 2, y: gridOrigin.y + gridSide / 2)
             gridBackground.zPosition = -2 // Sahne arka planının üzerinde, hücrelerin altında
             addChild(gridBackground)
 
@@ -688,11 +744,11 @@ class GameScene: SKScene {
                     
                     // Boş hücrelerin dolgu rengi: gridBackground'dan daha koyu olmalı
                     // Bu, "içi boş delikler" görünümü verecektir.
-                    cell.fillColor = SKColor(white: 0.08, alpha: 1.0) // Örnek: Çok Koyu Gri / Neredeyse Siyah
+                    cell.fillColor = gridEmptyColor
                     // VEYA gridBackground rengine göre:
                     // cell.fillColor = gridBackground.fillColor.darker(by: 0.2)
                     
-                    cell.strokeColor = .clear // Hücreler arası çizgi olmasın, ayrımı dolgu renkleri yapsın
+                    cell.strokeColor = .clear
                     cell.lineWidth = 0
                     cell.isAntialiased = false // Keskin pixel görünümü
 
@@ -706,9 +762,10 @@ class GameScene: SKScene {
 
     func updateRotateButtonState() {
         guard rotateButton != nil else { return }
-        rotateButton.alpha = rotateUsed ? 0.3 : 1.0
-        if let lockIcon = rotateButton.childNode(withName: "lockIcon") {
-            lockIcon.alpha = rotateUsed ? 1.0 : 0.0
+        let hasSelection = selectedNode != nil
+        rotateButton.alpha = (hasSelection && canRotate) ? 1.0 : 0.35
+        if let lockBar = rotateButton.childNode(withName: "lockBar") {
+            lockBar.alpha = (hasSelection && !canRotate) ? 1.0 : 0.0
         }
     }
 
@@ -723,14 +780,20 @@ class GameScene: SKScene {
                 let tapAction = SKAction.sequence([.scale(to: 1.15, duration: 0.08), .scale(to: 1.0, duration: 0.08)])
 
                 switch tappedNode.name {
-                case "soundToggle", "hapticToggle":
+                case "soundSwitch", "hapticSwitch":
                     tappedNode.run(tapAction)
-                    if tappedNode.name == "soundToggle" {
+                    if tappedNode.name == "soundSwitch" {
                         Settings.isSoundEnabled.toggle()
-                        (tappedNode as? SKSpriteNode)?.texture = SKTexture(imageNamed: Settings.isSoundEnabled ? "toggle_on_icon" : "toggle_off_icon")
+                        if let label = tappedNode as? SKLabelNode {
+                            label.text = Settings.isSoundEnabled ? "AÇIK" : "KAPALI"
+                            label.fontColor = Settings.isSoundEnabled ? .systemGreen : .systemRed
+                        }
                     } else {
                         Settings.isHapticEnabled.toggle()
-                        (tappedNode as? SKSpriteNode)?.texture = SKTexture(imageNamed: Settings.isHapticEnabled ? "toggle_on_icon" : "toggle_off_icon")
+                        if let label = tappedNode as? SKLabelNode {
+                            label.text = Settings.isHapticEnabled ? "AÇIK" : "KAPALI"
+                            label.fontColor = Settings.isHapticEnabled ? .systemGreen : .systemRed
+                        }
                     }
                 case "restartSettingsButton":
                     tappedNode.run(tapAction) { [weak self] in
@@ -765,14 +828,22 @@ class GameScene: SKScene {
                 return
             }
 
-            // --- Panel kapalıyken çalışacak normal dokunma mantığı ---
-            guard let touch = touches.first else { return }
-            
-            // Bir blok zaten sürükleniyorsa, başka bir dokunma işlemi başlatma.
-            guard selectedNode == nil else { return }
+            if isProcessingPlacement { return }
 
+            guard let touch = touches.first else { return }
             let location = touch.location(in: self)
             let initiallyTouchedNode = atPoint(location)
+
+            if initiallyTouchedNode.name == "rotateButton" || initiallyTouchedNode.parent?.name == "rotateButton" {
+                guard let activeBlock = selectedNode as? BlockNode, canRotate, !isDragging else { return }
+                rotateBlock(activeBlock)
+                applySelectionHighlight(to: activeBlock)
+                canRotate = false
+                activeBlock.userData = activeBlock.userData ?? NSMutableDictionary()
+                activeBlock.userData?["rotateUsed"] = true
+                updateRotateButtonState()
+                return
+            }
 
             if initiallyTouchedNode.name == "restartButton" || initiallyTouchedNode.parent?.name == "restartButton" { restartGame(); return }
             if initiallyTouchedNode.name == "menuButton" || initiallyTouchedNode.parent?.name == "menuButton" {
@@ -792,68 +863,72 @@ class GameScene: SKScene {
                 if Settings.isHapticEnabled { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                 return
             }
-            var nodeForRotateCheck: SKNode? = initiallyTouchedNode
-            var didTapRotateButton = false
-            while nodeForRotateCheck != nil {
-                if nodeForRotateCheck?.name == "rotateButton" { didTapRotateButton = true; break }
-                if nodeForRotateCheck == self { break }
-                nodeForRotateCheck = nodeForRotateCheck?.parent
-            }
-            
-            // --- DÜZELTİLMİŞ DÖNDÜRME MANTIĞI ---
-            // Döndürme butonu artık sadece bloğu döndürür ve seçim durumunu değiştirmez.
-            if didTapRotateButton, !rotateUsed, let firstBlock = nextBlocks.first {
-                rotateBlock(firstBlock)
-                rotateUsed = true
-                updateRotateButtonState()
-                return // İşlemi burada bitirerek sürükleme mantığına geçmesini engelliyoruz.
-            }
-            
-            // --- SÜRÜKLEME MANTIĞI ---
+
+            // --- BLOK SEÇİM / SÜRÜKLEME ---
             var currentNodeForDrag: SKNode? = initiallyTouchedNode
-            var draggableBlockNode: BlockNode? = nil
+            var tappedBlock: BlockNode? = nil
             while currentNodeForDrag != nil {
-                if let foundNode = currentNodeForDrag as? BlockNode, foundNode.name == "draggable" { draggableBlockNode = foundNode; break }
+                if let foundNode = currentNodeForDrag as? BlockNode, foundNode.name == "draggable" { tappedBlock = foundNode; break }
                 if currentNodeForDrag == self { break }
                 currentNodeForDrag = currentNodeForDrag?.parent
             }
-            if let foundDraggableNode = draggableBlockNode, let firstBlockToDrag = nextBlocks.first, foundDraggableNode == firstBlockToDrag {
-                if Settings.isSoundEnabled {
-                        run(SKAction.playSoundFileNamed("place.wav", waitForCompletion: false))
-                    }
-                selectedNode = foundDraggableNode
-                selectedNode?.zPosition = 10
-                lastValidPosition = foundDraggableNode.position
-                isDragging = true
-                blockOffset = CGPoint(x: foundDraggableNode.position.x - location.x, y: foundDraggableNode.position.y - location.y)
-                selectedNode?.run(SKAction.scale(to: 1.0, duration: 0.08))
+
+            if let tappedBlock = tappedBlock, nextBlocks.contains(tappedBlock) {
+                setSelectedBlock(tappedBlock)
+                tappedBlock.zPosition = 10
+                lastValidPosition = tappedBlock.position
+                isDragging = false
+                draggingTouch = touch
+                dragStartLocation = location
+                blockOffset = CGPoint(x: tappedBlock.position.x - location.x, y: tappedBlock.position.y - location.y)
+                return
             }
+
+            setSelectedBlock(nil)
         }
 
     // GameScene sınıfı içinde:
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-          guard let touch = touches.first, let node = selectedNode, isDragging else { return }
+          guard let draggingTouch = draggingTouch, let node = selectedNode else { return }
+          guard let touch = touches.first(where: { $0 == draggingTouch }) else { return }
           let location = touch.location(in: self)
+          if !isDragging {
+              if let start = dragStartLocation {
+                  let dx = location.x - start.x
+                  let dy = location.y - start.y
+                  if hypot(dx, dy) < 6 {
+                      return
+                  }
+              }
+              isDragging = true
+              if let block = node as? BlockNode {
+                  block.userData = block.userData ?? NSMutableDictionary()
+                  if block.userData?["trayScale"] == nil {
+                      block.userData?["trayScale"] = block.xScale
+                  }
+                  if block.xScale != 1.0 || block.yScale != 1.0 {
+                      block.setScale(1.0)
+                  }
+              }
+          }
           let newPosition = CGPoint(x: location.x + blockOffset.x, y: location.y + blockOffset.y)
-             node.position = newPosition
+          node.position = newPosition
 
           // 1. Tüm eski vurgulamaları temizle
-          resetProspectiveHighlights() // Özel "aktif blok rengi + pulse" vurgularını temizler
-          resetGridHighlight()       // Standart gridNode ayak izi vurgusunu (yeşil/kırmızı için hazırlık) sıfırlar
+          resetProspectiveHighlights()
+          resetGridHighlight()
 
-          if let positions = getBlockGridPositions(node) { // Bu [(row: Int, col: Int)] döndürür
+          if let positions = getBlockGridPositions(node) {
               let isValid = isValidPlacement(positions)
               node.alpha = isValid ? 1.0 : 0.5
 
               // 2. Standart ayak izi vurgusunu (yeşil/kırmızı) uygula
               highlightGrid(positions: positions, isValid: isValid)
 
-              // 3. Eğer yerleşim geçerliyse, yeni "temizlenecek hat" vurgusunu uygula
+              // 3. Eğer yerleşim geçerliyse, temizlenecek hat vurgusunu uygula
               if isValid {
                   applyProspectiveClearHighlight(forPlacing: positions, activeBlockNode: node as? BlockNode)
               }
-              // Geçersiz yerleşimde ekstra bir 'else' bloğuna gerek yok, çünkü yukarıdaki reset fonksiyonları
-              // ve highlightGrid(isValid: false) durumu zaten yönetiyor.
           }
       }
     
@@ -861,7 +936,7 @@ class GameScene: SKScene {
         for row in 0..<gridSize {
             for col in 0..<gridSize {
                 gridNodes[row][col].removeAction(forKey: "previewGlow")
-                gridNodes[row][col].fillColor = .clear
+                gridNodes[row][col].fillColor = gridEmptyColor
             }
         }
 
@@ -912,82 +987,84 @@ class GameScene: SKScene {
         for row in 0..<gridSize {
             for col in 0..<gridSize {
                 gridNodes[row][col].removeAction(forKey: "previewGlow")
-                gridNodes[row][col].fillColor = .clear
-                gridNodes[row][col].strokeColor = SKColor.white.withAlphaComponent(0.09)
-                gridNodes[row][col].lineWidth = 1
+                gridNodes[row][col].fillColor = gridEmptyColor
+                gridNodes[row][col].strokeColor = .clear
+                gridNodes[row][col].lineWidth = 0
             }
         }
     }
 
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            guard let draggingTouch = draggingTouch, touches.contains(draggingTouch) else { return }
             // --- 1. Kilit Kontrolü ---
-            // Eğer başka bir blok yerleştirme işlemi zaten devam ediyorsa, bu dokunmayı tamamen yoksay.
-            guard !isProcessingPlacement else { return }
-            
-            // --- 2. Gerekli Değişkenlerin Kontrolü ---
-            guard let node = selectedNode, isDragging else {
-                // Eğer sürüklenen bir düğüm yoksa, bir anormallik olabilir, kilidin aktif olmadığından emin ol.
-                isProcessingPlacement = false
+            guard !isProcessingPlacement else {
+                self.draggingTouch = nil
+                dragStartLocation = nil
                 return
             }
-            
-            // --- 3. KİLİDİ DEVREYE AL ---
-            // Dokunma işlemini işlemeye başlıyoruz, bu yüzden başka bir dokunmanın araya girmemesi için sistemi kilitle.
+
+            guard let node = selectedNode else {
+                self.draggingTouch = nil
+                dragStartLocation = nil
+                return
+            }
+
+            if !isDragging {
+                node.alpha = 1.0
+                self.draggingTouch = nil
+                dragStartLocation = nil
+                resetProspectiveHighlights()
+                resetGridHighlight()
+                return
+            }
+
+            // --- 2. KİLİDİ DEVREYE AL ---
             isProcessingPlacement = true
             isDragging = false
 
-            // --- 4. Yerleştirme Mantığı ---
+            // --- 3. Yerleştirme Mantığı ---
             if let positions = getBlockGridPositions(node), isValidPlacement(positions) {
-                
-                // --- BAŞARILI YERLEŞTİRME ---
-                
-                guard positions.count == node.children.count else {
+                let parts = blockParts(from: node)
+                guard positions.count == parts.count else {
                     returnToLastValidPosition(node)
                     return
                 }
-                
-                for (index, pos) in positions.enumerated() {
-                    if let shapeNode = node.children[index] as? SKShapeNode {
-                        setGridValue(1, at: pos, sprite: shapeNode)
-                        shapeNode.userData = shapeNode.userData ?? NSMutableDictionary()
-                        shapeNode.userData?["originalColor"] = shapeNode.fillColor
-                    }
+
+                if Settings.isSoundEnabled {
+                    run(SKAction.playSoundFileNamed("place.wav", waitForCompletion: false))
                 }
-                
+                if pointsPerPlacementCell > 0 {
+                    score += positions.count * pointsPerPlacementCell
+                    updateScoreLabel()
+                }
+
+                for (index, pos) in positions.enumerated() {
+                    let shapeNode = parts[index]
+                    setGridValue(1, at: pos, sprite: shapeNode)
+                    shapeNode.userData = shapeNode.userData ?? NSMutableDictionary()
+                    shapeNode.userData?["originalColor"] = shapeNode.fillColor
+                }
+
                 snapAndPlaceBlock(node, at: positions)
-                
+
                 saveGameState()
-                
+
                 if let index = nextBlocks.firstIndex(of: node) {
                     nextBlocks.remove(at: index)
-                    if nextBlocks.isEmpty {
-                        spawnNextBlocks()
-                    } else if nextBlocks.count == 1 {
-                        let leftPos = CGPoint(x: size.width/2 - 90, y: 100)
-                        let block = nextBlocks[0]
-                        block.position = leftPos
-                        if block.parent == nil { addChild(block) }
-                        
-                        let shape   = generateRandomShape()
-                        let newPos  = CGPoint(x: size.width/2 + 90, y: 100)
-                        let newBloc = spawnBlock(from: shape, at: newPos)
-                        newBloc.setScale(0.8)
-                        nextBlocks.append(newBloc)
-                        
-                        updateBottomBlockStyles()
-                        rotateUsed = false
-                        updateRotateButtonState()
-                    }
                 }
-                
+                if nextBlocks.isEmpty {
+                    spawnNextBlocks()
+                } else {
+                    updateBottomBlockStyles()
+                }
+
                 layoutPreview()
                 checkGameOver()
-                
-                // Görsel Efektler
+
                 let bounce = SKAction.sequence([.scale(to: 1.14, duration: 0.09), .scale(to: 1.0, duration: 0.09)])
                 node.run(bounce)
-                
+
                 let halo = SKShapeNode(circleOfRadius: cellSize/1.7)
                 halo.position = node.position
                 halo.fillColor = .yellow
@@ -995,35 +1072,42 @@ class GameScene: SKScene {
                 halo.zPosition = 120
                 addChild(halo)
                 halo.run(.sequence([.scale(to: 2.1, duration: 0.22), .fadeOut(withDuration: 0.22), .removeFromParent()]))
-                
-                // KİLİDİ GÜVENLE AÇ
-                // Animasyonların bitmesi için küçük bir bekleme sonrası kilidi aç.
+
                 let unlockAction = SKAction.run { [weak self] in self?.isProcessingPlacement = false }
                 self.run(SKAction.sequence([SKAction.wait(forDuration: 0.3), unlockAction]))
-
+                setSelectedBlock(nil)
             } else {
-                // --- GEÇERSİZ YERLEŞTİRME ---
-                // Bloğu eski yerine döndür. Bu fonksiyon kendi içinde kilidi açmaktan sorumlu.
-                node.run(SKAction.scale(to: 0.8, duration: 0.1))
                 returnToLastValidPosition(node)
             }
-            
-            // --- 5. Temizlik ---
-            // Bu işlemler kilidin durumundan bağımsız olarak, dokunma bittiğinde yapılmalı.
+
             resetProspectiveHighlights()
             resetGridHighlight()
-            selectedNode = nil
+            self.draggingTouch = nil
+            dragStartLocation = nil
+        }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            guard let draggingTouch = draggingTouch, touches.contains(draggingTouch) else { return }
+            if let node = selectedNode {
+                returnToLastValidPosition(node)
+            }
+            isDragging = false
+            isProcessingPlacement = false
+            self.draggingTouch = nil
+            dragStartLocation = nil
+            resetProspectiveHighlights()
+            resetGridHighlight()
         }
 
     func getBlockGridPositions(_ node: SKNode) -> [(row: Int, col: Int)]? {
         var positions: [(row: Int, col: Int)] = []
-        for square in node.children {
-            guard let part = square as? SKShapeNode else { continue }
+        let parts = blockParts(from: node)
+        for part in parts {
             let worldPos = node.convert(part.position, to: self)
             guard let pos = pointToGridPosition(worldPos) else { return nil }
             positions.append(pos)
         }
-        return positions.count == node.children.count ? positions : nil
+        return positions.count == parts.count ? positions : nil
     }
 
     func pointToGridPosition(_ point: CGPoint) -> (row: Int, col: Int)? {
@@ -1088,7 +1172,8 @@ class GameScene: SKScene {
             return .place
         }
     func snapAndPlaceBlock(_ node: SKNode, at positions: [(row: Int, col: Int)]) {
-        guard let firstSquare = node.children.first as? SKShapeNode else { return }
+        let parts = blockParts(from: node)
+        guard let firstSquare = parts.first else { return }
         guard let firstPosition = positions.first else { return }
         let firstSquareWorldPos = node.convert(firstSquare.position, to: self)
         let targetGridPos = gridPositionToPoint(row: firstPosition.row, col: firstPosition.col)
@@ -1146,7 +1231,8 @@ class GameScene: SKScene {
 
     func returnToLastValidPosition(_ node: SKNode) {
             if let lastPos = lastValidPosition {
-                
+                let restoreScale = (node as? BlockNode)?.userData?["trayScale"] as? CGFloat
+
                 // 1. Animasyon bittiğinde kilidi açacak olan eylemi oluştur.
                 //    Bu, en önemli adımdır.
                 let unlockAction = SKAction.run { [weak self] in
@@ -1155,17 +1241,10 @@ class GameScene: SKScene {
                 
                 // 2. Orijinal kodundaki animasyon ve state güncelleme eylemlerini al.
                 let moveAction = SKAction.move(to: lastPos, duration: 0.2)
-                let updateStateAction = SKAction.run { [weak self] in
-                    guard let self = self else { return }
+                let updateStateAction = SKAction.run {
                     node.alpha = 1.0
-                    // Not: Parmağı kaldırdığımızda bloğun grid'deki eski yerini zaten
-                    // siliyoruz. Geçersiz bir yerleştirmede bu değeri tekrar 1 yapmak
-                    // hatalara yol açabilir. Bu yüzden o kısmı yorum satırı yapmak
-                    // daha güvenli olabilir, ama şimdilik orijinal mantığı koruyorum.
-                    if let positions = self.getBlockGridPositions(node) {
-                        for pos in positions {
-                            self.setGridValue(1, at: pos)
-                        }
+                    if let restoreScale = restoreScale {
+                        node.setScale(restoreScale)
                     }
                 }
                 
@@ -1182,10 +1261,14 @@ class GameScene: SKScene {
         }
 
     func rotateBlock(_ node: SKNode) {
-        guard node.children.count > 0 else { return }
+        let parts = blockParts(from: node)
+        guard !parts.isEmpty else { return }
+        if Settings.isSoundEnabled {
+            run(SKAction.playSoundFileNamed("rotate.wav", waitForCompletion: false))
+        }
 
         // 1. Çocuk node'ların mevcut lokal pozisyonlarını al.
-        let originalChildLocalPositions = node.children.compactMap { $0.position }
+        let originalChildLocalPositions = parts.map { $0.position }
 
         // 2. Bu lokal pozisyonlara göre bir merkez noktası hesapla.
         let centerX = originalChildLocalPositions.map { $0.x }.reduce(0, +) / CGFloat(originalChildLocalPositions.count)
@@ -1193,7 +1276,7 @@ class GameScene: SKScene {
         let centerOfShapeLocally = CGPoint(x: centerX, y: centerY)
 
         // 3. Her bir çocuk node'un lokal pozisyonunu bu lokal merkeze göre döndür.
-        for (index, square) in node.children.enumerated() {
+        for (index, square) in parts.enumerated() {
             let localPos = originalChildLocalPositions[index]
             let translatedPos = CGPoint(x: localPos.x - centerOfShapeLocally.x, y: localPos.y - centerOfShapeLocally.y)
             let rotatedPos = CGPoint(x: -translatedPos.y, y: translatedPos.x) // 90 derece saat yönünde
@@ -1210,32 +1293,18 @@ class GameScene: SKScene {
         // !!! ÖNEMLİ: Burada, döndürme sonrası "eğer mevcut yerde geçersizse geri al" GİBİ BİR MANTIK OLMAMALI !!!
         // Blok, mantıksal olarak DÖNMÜŞ HALDE KALMALI.
 
-        // 5. asyncAfter bloğu (daha önce önerildiği gibi)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self = self, let currentRotatedBlock = self.nextBlocks.first else { return }
-            // currentRotatedBlock'un yukarıda güncellenen DÖNMÜŞ çocuk pozisyonlarına sahip olması beklenir.
-            if !self.canPlaceBlock(currentRotatedBlock, considerRotation: false) {
-                self.showGameOver()
-            }
-        }
     }
 
     func spawnNextBlocks() {
             for block in nextBlocks { block.removeFromParent() }
             nextBlocks.removeAll()
-            let y: CGFloat = 100
-            let dx: CGFloat = 90
-            let pos = [
-                CGPoint(x: size.width/2 - dx, y: y),
-                CGPoint(x: size.width/2 + dx, y: y)
-            ]
-            for i in 0..<2 {
+            let positions = blockTrayPositions()
+            let blockScale = min(0.75, max(0.6, cellSize / 70))
+            for pos in positions {
                 let shape = generateRandomShape()
-                let block = spawnBlock(from: shape, at: pos[i])
-                block.setScale(0.8)
-                if i == 0 {
-                    addChild(block) // SADECE İLK BLOK SAHNEYE EKLENİR!
-                }
+                let block = spawnBlock(from: shape, at: pos)
+                block.setScale(blockScale)
+                addChild(block)
                 nextBlocks.append(block)
             }
             // nextBlocks[0].run( ... ) animasyonunu SİL veya YORUM SATIRI YAP!
@@ -1243,8 +1312,7 @@ class GameScene: SKScene {
             //    SKAction.sequence([ .scale(to: 1.1, duration: 0.12),
             //                        .scale(to: 1.0, duration: 0.12) ])
             // )
-            rotateUsed = false
-            selectedNode = nil
+            setSelectedBlock(nil)
             updateRotateButtonState()
             layoutPreview()
             checkGameOver()
@@ -1254,16 +1322,28 @@ class GameScene: SKScene {
 
     func generateRandomShape() -> BlockShape {
         let shapes: [[(Int, Int)]] = [
-            [(0,0), (1,0), (1,1)],
+            [(0,0)],
+            [(0,0), (1,0)],
+            [(0,0), (0,1)],
+            [(0,0), (1,0), (2,0)],
             [(0,0), (0,1), (0,2)],
-            [(0,0), (1,0), (0,1), (1,1)],
             [(0,0), (1,0), (2,0), (3,0)],
+            [(0,0), (0,1), (0,2), (0,3)],
+            [(0,0), (1,0), (2,0), (3,0), (4,0)],
+            [(0,0), (0,1), (0,2), (0,3), (0,4)],
+            [(0,0), (1,0), (0,1), (1,1)],
+            [(0,0), (1,0), (2,0), (0,1)],
+            [(0,0), (1,0), (2,0), (2,1)],
+            [(0,0), (0,1), (0,2), (1,0)],
             [(0,0), (0,1), (0,2), (1,2)],
             [(0,0), (1,0), (1,1), (2,1)],
-            [(0,0), (1,0), (2,0), (2,1)],
-            [(0,0), (1,0), (1,-1), (1,1)],
-            [(0,0), (0,1), (1,1), (1,2)],
-            [(0,0), (1,0), (2,0), (2,-1)]
+            [(0,1), (1,1), (1,0), (2,0)],
+            [(0,0), (1,0), (2,0), (1,1)],
+            [(0,0), (1,0), (2,0), (1,1), (1,2)],
+            [(0,0), (1,0), (2,0), (0,1), (1,1), (2,1)],
+            [(0,0), (1,0), (2,0),
+             (0,1), (1,1), (2,1),
+             (0,2), (1,2), (2,2)]
         ]
         let colors: [SKColor] = [
             .cyan, .orange, .green, .yellow,
@@ -1271,14 +1351,13 @@ class GameScene: SKScene {
         ]
         let randomIndex = Int.random(in: 0..<shapes.count)
         let randomColor = colors.randomElement() ?? .white
-        let rand = Double.random(in: 0...1)
-        var type: BlockType = .normal
-        if rand < 0.10 { type = .bomb }
-        else if rand < 0.20 { type = .rainbow }
-        return BlockShape(cells: shapes[randomIndex], color: randomColor, type: type)
+        return BlockShape(cells: shapes[randomIndex], color: randomColor, type: .normal)
     }
 
     func showGameOver() {
+        if Settings.isSoundEnabled {
+            run(SKAction.playSoundFileNamed("gameover.wav", waitForCompletion: false))
+        }
         // 1. Temalı Overlay
         let overlay = SKShapeNode(rectOf: CGSize(width: size.width, height: size.height))
         overlay.position = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -1472,9 +1551,10 @@ class GameScene: SKScene {
         nextBlocks.removeAll()
         
         // Diğer oyun durumlarını sıfırla (mevcut kodunuz)
-        rotateUsed = false
-        selectedNode = nil
+        setSelectedBlock(nil)
         isDragging = false
+        draggingTouch = nil
+        dragStartLocation = nil
         lastValidPosition = nil
         
         // Olası vurgulamaları da temizleyelim (önlem olarak)
@@ -1491,50 +1571,6 @@ class GameScene: SKScene {
 
     private func layoutPreview() {
            previewContainer.removeAllChildren()
-           guard nextBlocks.count > 1 else { return }
-
-           // Preview kutusu çiz
-           let previewBox = SKShapeNode(rectOf: CGSize(width: 80, height: 80), cornerRadius: 14)
-           previewBox.fillColor = SKColor.black.withAlphaComponent(0.34)
-           previewBox.strokeColor = .white.withAlphaComponent(0.16)
-           previewBox.lineWidth = 2
-           previewBox.position = CGPoint(x: size.width - 60, y: 76)
-           previewBox.zPosition = 300
-           previewContainer.addChild(previewBox)
-
-           // "NEXT" yazısı
-           let nextLabel = SKLabelNode(fontNamed: "PressStart2P-Regular")
-           nextLabel.text = "NEXT"
-           nextLabel.fontSize = 16
-           nextLabel.fontColor = .white.withAlphaComponent(0.9)
-           nextLabel.position = CGPoint(x: previewBox.position.x, y: previewBox.position.y + 52)
-           nextLabel.zPosition = 310
-           previewContainer.addChild(nextLabel)
-
-           // Sıradaki blok için yeni node oluştur (scale 1.0 ile)
-           let blockNode = nextBlocks[1]
-           guard let blockNodeCast = blockNode as? BlockNode else { return }
-           let shape = blockNodeCast.blockShape
-           let previewBlock = spawnBlock(from: shape, at: .zero, scale: 1.0)
-
-           // Ortala
-           let blockBox = previewBlock.calculateAccumulatedFrame()
-           for c in previewBlock.children {
-               c.position.x -= blockBox.midX
-               c.position.y -= blockBox.midY
-           }
-
-           // Preview kutusuna tam sığacak şekilde scale hesapla
-           let largestSide = max(blockBox.width, blockBox.height)
-           let padding: CGFloat = 18
-           let previewSize: CGFloat = 80
-           let scale = (previewSize - padding) / largestSide
-           previewBlock.setScale(scale)
-
-           previewBlock.position = previewBox.position
-           previewBlock.alpha = 1.0
-           previewBlock.zPosition = 310
-           previewContainer.addChild(previewBlock)
        }
 
 
@@ -1575,14 +1611,14 @@ class GameScene: SKScene {
 
            if lineCount > 0 {
                   if Settings.isSoundEnabled {
-                      run(SKAction.playSoundFileNamed("explosion.wav", waitForCompletion: false))
+                      run(SKAction.playSoundFileNamed("clear.wav", waitForCompletion: false))
                   }
                   comboCount += 1
                   // ...
               
                if comboCount >= 2 {
                    if Settings.isSoundEnabled {
-                       run(SKAction.playSoundFileNamed("explosion.wav", waitForCompletion: false))
+                       run(SKAction.playSoundFileNamed("combo.wav", waitForCompletion: false))
                    }
                    showComboEffect(level: comboCount) // Kombo efekti göster
                    
@@ -1623,16 +1659,17 @@ class GameScene: SKScene {
                comboCount = 0
            }
            
-           updateScoreLabel() // Etiketin anlık değerini günceller
            checkForLevelUp()
                
 
            // Sweep animasyonları
+           let gridSide = cellSize * CGFloat(gridSize)
+           let gridCenter = CGPoint(x: gridOrigin.x + gridSide / 2, y: gridOrigin.y + gridSide / 2)
            for row_sweep in fullRows {
                let sweep = SKShapeNode(rectOf: CGSize(width: cellSize * CGFloat(gridSize), height: cellSize / 1.4))
                sweep.fillColor = .white
                sweep.alpha = 0.18
-               sweep.position = CGPoint(x: size.width/2, y: gridOrigin.y + CGFloat(row_sweep) * cellSize + cellSize/2)
+               sweep.position = CGPoint(x: gridCenter.x, y: gridOrigin.y + CGFloat(row_sweep) * cellSize + cellSize/2)
                sweep.zPosition = 101
                addChild(sweep)
                sweep.run(.sequence([
@@ -1644,7 +1681,7 @@ class GameScene: SKScene {
                let sweep = SKShapeNode(rectOf: CGSize(width: cellSize / 1.4, height: cellSize * CGFloat(gridSize)))
                sweep.fillColor = .white
                sweep.alpha = 0.18
-               sweep.position = CGPoint(x: gridOrigin.x + CGFloat(col_sweep) * cellSize + cellSize/2, y: size.height/2)
+               sweep.position = CGPoint(x: gridOrigin.x + CGFloat(col_sweep) * cellSize + cellSize/2, y: gridCenter.y)
                sweep.zPosition = 101
                addChild(sweep)
                sweep.run(.sequence([
@@ -1810,27 +1847,11 @@ class GameScene: SKScene {
 
        // GameScene sınıfı içinde:
        func checkGameOver() {
-           guard let currentBlock = nextBlocks.first else { return }
-
-           if canPlaceBlock(currentBlock, considerRotation: false) {
-               return // Oyun devam edebilir
-           }
-
-           // Blok olduğu gibi yerleştirilemiyor. Döndürme hakkı var mı ve işe yarar mı?
-           if !rotateUsed {
-               if canPlaceBlock(currentBlock, considerRotation: true) {
-                   return // Döndürerek yerleşebilir, oyun devam
-               } else {
-                   // Döndürülse bile yerleşemiyor VE döndürme hakkı henüz kullanılmamış.
-                   // Bu durumda oyun biter.
-                   startGameOverGridFillAnimation() // << DEĞİŞİKLİK: showGameOver() yerine bu çağrılacak
-                   return
-               }
-           } else { // Döndürme hakkı zaten kullanılmış
-               // Blok olduğu gibi de yerleştirilemiyor, döndürme hakkı da yok. Oyun biter.
-               startGameOverGridFillAnimation() // << DEĞİŞİKLİK: showGameOver() yerine bu çağrılacak
+           guard !nextBlocks.isEmpty else { return }
+           if nextBlocks.compactMap({ $0 as? BlockNode }).contains(where: { canPlaceBlockWithAvailableRotation($0) }) {
                return
            }
+           startGameOverGridFillAnimation()
        }
        
        // GameScene sınıfı içinde:
@@ -1916,18 +1937,31 @@ class GameScene: SKScene {
            self.run(SKAction.sequence(actions))
        }
 
-       func canPlaceBlock(_ block: SKNode, considerRotation: Bool) -> Bool {
-           let originalPositions = block.children.compactMap { ($0 as? SKShapeNode)?.position }
-           guard originalPositions.count == block.children.count else { return false }
+       private func shapeOffsets(from block: SKNode) -> [(Int, Int)]? {
+           let parts = blockParts(from: block)
+           let originalPositions = parts.map { $0.position }
+           guard !originalPositions.isEmpty else { return nil }
            let minX = originalPositions.map { $0.x }.min() ?? 0
            let minY = originalPositions.map { $0.y }.min() ?? 0
-           let shapeOffsets = originalPositions.map {
+           return originalPositions.map {
                (Int(round(($0.x - minX) / cellSize)), Int(round(($0.y - minY) / cellSize)))
            }
-           if canPlaceShapeAnywhere(shapeOffsets) { return true }
-           if considerRotation {
-               let rotatedOffsets = shapeOffsets.map { (x, y) in (-y, x) }
-               if canPlaceShapeAnywhere(rotatedOffsets) { return true }
+       }
+
+       func canPlaceBlock(_ block: SKNode) -> Bool {
+           guard let shapeOffsets = shapeOffsets(from: block) else { return false }
+           return canPlaceShapeAnywhere(shapeOffsets)
+       }
+
+       func canPlaceBlockWithAvailableRotation(_ block: BlockNode) -> Bool {
+           guard var offsets = shapeOffsets(from: block) else { return false }
+           let rotateUsed = block.userData?["rotateUsed"] as? Bool ?? false
+           if rotateUsed {
+               return canPlaceShapeAnywhere(offsets)
+           }
+           for _ in 0..<4 {
+               if canPlaceShapeAnywhere(offsets) { return true }
+               offsets = offsets.map { (x, y) in (-y, x) }
            }
            return false
        }
@@ -2021,7 +2055,6 @@ class GameScene: SKScene {
            if blocksClearedByBomb > 0 {
                score += blocksClearedByBomb * pointsPerBlockFromSpecial
                animateScoreUpdate(to: score)
-               updateScoreLabel()
                checkForLevelUp() // <-- BU SATIRI EKLEYİN// Skor etiketini güncelle
                // İsteğe bağlı: Bomba patlaması için küçük bir "puan kazandın" efekti gösterilebilir.
                // Kombo sayacını burada sıfırlamıyoruz, çünkü checkAndClearLines bunu yönetecek.
@@ -2054,7 +2087,6 @@ class GameScene: SKScene {
            if blocksClearedByRainbow > 0 {
                score += blocksClearedByRainbow * pointsPerBlockFromSpecial
                animateScoreUpdate(to: score)
-               updateScoreLabel()
                checkForLevelUp() // <-- BU SATIRI EKLEYİN// Skor etiketini güncelle
            }
        }
@@ -2202,14 +2234,9 @@ class GameScene: SKScene {
            // spriteNode.lineWidth = 0.5 // Bu zaten addBevelEffect'te ayarlanmıştı, değişmesine gerek yok.
        }
        func updateBottomBlockStyles() {
-           for (i, block) in nextBlocks.enumerated() {
-               if i == 0 {
-                   block.alpha = 1.0
-                   block.run(SKAction.fadeAlpha(to: 1.0, duration: 0.1))
-               } else {
-                   block.alpha = 0.75
-                   block.run(SKAction.fadeAlpha(to: 0.75, duration: 0.1))
-               }
+           for block in nextBlocks {
+               block.alpha = 1.0
+               block.run(SKAction.fadeAlpha(to: 1.0, duration: 0.1))
            }
        }
        
@@ -2402,14 +2429,27 @@ class GameScene: SKScene {
            var savedNextBlocks: [[String: Any]] = []
            for block in nextBlocks {
                if let blockNode = block as? BlockNode {
+                   guard let offsets = shapeOffsets(from: blockNode) else { continue }
                    let shape = blockNode.blockShape
                    var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
                    shape.color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-                   let blockData: [String: Any] = ["cells": shape.cells.map { [$0.0, $0.1] }, "color": [red, green, blue, alpha], "type": shape.type == .bomb ? "bomb" : (shape.type == .rainbow ? "rainbow" : "normal")]
+                   let rotateUsed = blockNode.userData?["rotateUsed"] as? Bool ?? false
+                   let blockData: [String: Any] = [
+                       "cells": offsets.map { [$0.0, $0.1] },
+                       "color": [red, green, blue, alpha],
+                       "type": shape.type == .bomb ? "bomb" : (shape.type == .rainbow ? "rainbow" : "normal"),
+                       "rotateUsed": rotateUsed
+                   ]
                    savedNextBlocks.append(blockData)
                }
            }
-           let gameState: [String: Any] = ["gridState": savedGrid, "nextBlocks": savedNextBlocks, "score": score, "level": currentLevel, "rotateUsed": rotateUsed]
+           let gameState: [String: Any] = [
+               "gridState": savedGrid,
+               "nextBlocks": savedNextBlocks,
+               "score": score,
+               "level": currentLevel,
+               "scoreForNextLevel": scoreForNextLevel
+           ]
            UserDefaults.standard.set(gameState, forKey: "savedGameState")
            print("Oyun durumu kaydedildi.")
        }
@@ -2422,7 +2462,7 @@ class GameScene: SKScene {
            
            score = gameState["score"] as? Int ?? 0
            currentLevel = gameState["level"] as? Int ?? 1
-           rotateUsed = gameState["rotateUsed"] as? Bool ?? false
+           scoreForNextLevel = gameState["scoreForNextLevel"] as? Int ?? 1500
            
            if let savedGrid = gameState["gridState"] as? [[String: Any]] {
                for cellData in savedGrid {
@@ -2454,10 +2494,10 @@ class GameScene: SKScene {
            if let savedNextBlocks = gameState["nextBlocks"] as? [[String: Any]] {
                nextBlocks.forEach { $0.removeFromParent() }
                nextBlocks.removeAll()
-               let y: CGFloat = 100
-               let dx: CGFloat = 90
-               let positions = [CGPoint(x: size.width/2 - dx, y: y), CGPoint(x: size.width/2 + dx, y: y)]
+               let positions = blockTrayPositions()
+               let blockScale = min(0.75, max(0.6, cellSize / 70))
                for (index, blockData) in savedNextBlocks.enumerated() {
+                   if index >= positions.count { break }
                    let cellsArray = blockData["cells"] as! [[Int]]
                    let cells = cellsArray.map { ($0[0], $0[1]) }
                    let colorArray = blockData["color"] as! [CGFloat]
@@ -2466,14 +2506,20 @@ class GameScene: SKScene {
                    let type: BlockType = typeString == "bomb" ? .bomb : (typeString == "rainbow" ? .rainbow : .normal)
                    let shape = BlockShape(cells: cells, color: color, type: type)
                    let block = spawnBlock(from: shape, at: positions[index])
-                   block.setScale(0.8)
-                   if index == 0 { addChild(block) }
+                   block.setScale(blockScale)
+                   let rotateUsed = blockData["rotateUsed"] as? Bool ?? false
+                   if rotateUsed {
+                       block.userData = block.userData ?? NSMutableDictionary()
+                       block.userData?["rotateUsed"] = true
+                   }
+                   addChild(block)
                    nextBlocks.append(block)
                }
            }
 
            updateScoreLabel()
            if levelLabel != nil { levelLabel.text = "Level: \(currentLevel)" }
+           setSelectedBlock(nil)
            updateRotateButtonState()
            layoutPreview()
            updateBottomBlockStyles()

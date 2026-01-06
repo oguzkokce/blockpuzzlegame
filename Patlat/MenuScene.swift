@@ -242,7 +242,7 @@ class MenuScene: SKScene {
                         generator.impactOccurred()
                     }
                     if Settings.isSoundEnabled {
-                        let soundAction = SKAction.playSoundFileNamed("button_tap.wav", waitForCompletion: false)
+                        let soundAction = SKAction.playSoundFileNamed("place.wav", waitForCompletion: false)
                         self.run(soundAction)
                     }
                     return
@@ -255,7 +255,7 @@ class MenuScene: SKScene {
                         let generator = UIImpactFeedbackGenerator(style: .medium)
                         generator.impactOccurred()
                     }
-                    let soundAction = SKAction.playSoundFileNamed("button_tap.wav", waitForCompletion: false)
+                    let soundAction = SKAction.playSoundFileNamed("place.wav", waitForCompletion: false)
                     self.run(soundAction)
                     return
                 }
@@ -263,7 +263,7 @@ class MenuScene: SKScene {
                     childNode(withName: "settingsPanel")?.removeFromParent()
                     childNode(withName: "settingsOverlay")?.removeFromParent()
                     if Settings.isSoundEnabled {
-                        let soundAction = SKAction.playSoundFileNamed("button_tap.wav", waitForCompletion: false)
+                        let soundAction = SKAction.playSoundFileNamed("place.wav", waitForCompletion: false)
                         self.run(soundAction)
                     }
                     return
